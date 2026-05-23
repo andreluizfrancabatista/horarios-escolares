@@ -8,8 +8,7 @@ class Sala(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     nome = Column(String(50), nullable=False)
-    capacidade = Column(Integer, nullable=False, default=40)
-    tipo = Column(String(50), nullable=True)        # Laboratório, Auditório, Sala comum...
+    tipo = Column(String(50), nullable=True)
     bloco = Column(String(20), nullable=True)
     ativa = Column(Boolean, default=True)
 

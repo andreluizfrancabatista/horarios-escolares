@@ -26,9 +26,7 @@ def listar(db: Session = Depends(get_db), _=Depends(get_current_user)):
 @router.post("/", response_model=ProfessorOut, dependencies=dep)
 def criar(data: ProfessorCreate, db: Session = Depends(get_db)):
     obj = Professor(**data.model_dump())
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
+    db.add(obj); db.commit(); db.refresh(obj)
     return obj
 
 
@@ -42,14 +40,12 @@ def atualizar(id: int, data: ProfessorUpdate, db: Session = Depends(get_db)):
     obj = get_or_404(db, id)
     for k, v in data.model_dump().items():
         setattr(obj, k, v)
-    db.commit()
-    db.refresh(obj)
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete("/{id}", dependencies=dep)
 def deletar(id: int, db: Session = Depends(get_db)):
     obj = get_or_404(db, id)
-    db.delete(obj)
-    db.commit()
+    db.delete(obj); db.commit()
     return {"ok": True}

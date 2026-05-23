@@ -24,7 +24,6 @@ api.interceptors.response.use(
 
 export default api
 
-// ── Auth ──────────────────────────────────────────
 export const authApi = {
   login: (email, password) => {
     const form = new URLSearchParams()
@@ -34,7 +33,6 @@ export const authApi = {
   },
 }
 
-// ── Semestres ─────────────────────────────────────
 export const semestresApi = {
   list: () => api.get('/semestres/'),
   get: (id) => api.get(`/semestres/${id}`),
@@ -44,25 +42,22 @@ export const semestresApi = {
   ativar: (id) => api.post(`/semestres/${id}/ativar`),
 }
 
-// ── Cursos ────────────────────────────────────────
-export const cursosApi = {
-  list: () => api.get('/cursos/'),
-  get: (id) => api.get(`/cursos/${id}`),
-  create: (d) => api.post('/cursos/', d),
-  update: (id, d) => api.put(`/cursos/${id}`, d),
-  delete: (id) => api.delete(`/cursos/${id}`),
+export const turmasApi = {
+  list: () => api.get('/turmas/'),
+  get: (id) => api.get(`/turmas/${id}`),
+  create: (d) => api.post('/turmas/', d),
+  update: (id, d) => api.put(`/turmas/${id}`, d),
+  delete: (id) => api.delete(`/turmas/${id}`),
 }
 
-// ── Disciplinas ───────────────────────────────────
 export const disciplinasApi = {
-  list: (curso_id) => api.get('/disciplinas/', { params: curso_id ? { curso_id } : {} }),
+  list: (turma_id) => api.get('/disciplinas/', { params: turma_id ? { turma_id } : {} }),
   get: (id) => api.get(`/disciplinas/${id}`),
   create: (d) => api.post('/disciplinas/', d),
   update: (id, d) => api.put(`/disciplinas/${id}`, d),
   delete: (id) => api.delete(`/disciplinas/${id}`),
 }
 
-// ── Professores ───────────────────────────────────
 export const professoresApi = {
   list: () => api.get('/professores/'),
   get: (id) => api.get(`/professores/${id}`),
@@ -71,7 +66,6 @@ export const professoresApi = {
   delete: (id) => api.delete(`/professores/${id}`),
 }
 
-// ── Salas ─────────────────────────────────────────
 export const salasApi = {
   list: () => api.get('/salas/'),
   get: (id) => api.get(`/salas/${id}`),
@@ -80,10 +74,28 @@ export const salasApi = {
   delete: (id) => api.delete(`/salas/${id}`),
 }
 
-// ── Horários ──────────────────────────────────────
 export const horariosApi = {
   list: (params) => api.get('/horarios/', { params }),
   create: (d) => api.post('/horarios/', d),
   update: (id, d) => api.put(`/horarios/${id}`, d),
   delete: (id) => api.delete(`/horarios/${id}`),
+}
+
+export const alocacoesApi = {
+  list: (semestre_id) => api.get('/alocacoes/', { params: semestre_id ? { semestre_id } : {} }),
+  create: (d) => api.post('/alocacoes/', d),
+  delete: (id) => api.delete(`/alocacoes/${id}`),
+}
+
+export const disponibilidadesApi = {
+  list: (semestre_id, professor_id) => api.get('/disponibilidades/', { params: { semestre_id, professor_id } }),
+  salvar: (d) => api.post('/disponibilidades/', d),
+  deletarSlot: (params) => api.delete('/disponibilidades/', { params }),
+  salvarGrade: (professor_id, semestre_id, slots) =>
+    api.put(`/disponibilidades/professor/${professor_id}/semestre/${semestre_id}`, slots),
+}
+
+export const solverApi = {
+  rodar: (semestre_id) => api.post('/solver/rodar', { semestre_id }),
+  aceitar: (slots, semestre_id) => api.post(`/solver/aceitar?semestre_id=${semestre_id}`, slots),
 }
