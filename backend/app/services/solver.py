@@ -1,242 +1,324 @@
 """
-Solver de horários usando Google OR-Tools CP-SAT.
+Solver de horários — Google OR-Tools CP-SAT
 
-Regras rígidas (hard constraints):
-  1. Professor não pode dar 2 aulas simultâneas
-  2. Turma não pode ter 2 aulas simultâneas
-  3. Sala não pode ter 2 aulas simultâneas
-  4. Cada alocação (professor+disciplina+turma) precisa de exatamente 4 slots/semana
-  5. Slots marcados como 'indisponivel' nunca são usados para o professor
+Turnos e slots (cada turno tem exatamente 4 slots consecutivos):
+  Manhã:  08:00, 08:50, 10:00, 10:50
+  Tarde:  13:10, 14:00, 15:10, 16:00
+  Noite:  19:00, 19:50, 21:00, 21:50
 
-Regras suaves (soft — minimizadas na função objetivo):
-  6. Evitar slots 'prefere_nao' (penalidade por slot usado)
-  7. Distribuir as 4 aulas em dias diferentes (penalidade por dia repetido)
-  8. Minimizar janelas no dia do professor
-     (janela = slot vazio entre dois slots ocupados no mesmo dia)
+Regras de turno por tipo de curso:
+  Manhã    → só blocos do turno Manhã
+  Tarde    → só blocos do turno Tarde
+  Integral → blocos de Manhã OU Tarde  (nunca Noite)
+  Noite    → só blocos do turno Noite
+
+Regras rígidas:
+  1. Cada alocação recebe exatamente 1 bloco de 4 slots (o bloco inteiro, no mesmo dia)
+  2. Turno respeitado conforme acima
+  3. Professor sem sobreposição
+  4. Turma sem sobreposição
+  5. Sala sem sobreposição
+  6. Slots 'indisponivel' bloqueados para o professor
+
+Regras suaves:
+  7. Evitar slots 'prefere_nao'                       (peso 10)
+  8. Não repetir turma no mesmo dia                   (peso  5)
+  9. Minimizar janelas no dia do professor             (peso  3)
+ 10. Honrar sala preferida da alocação               (peso  1 — penaliza só se não conseguir)
 """
 
-from ortools.sat.python import cp_model
 from sqlalchemy.orm import Session
-from typing import Optional
-
 from app.models.alocacao import AlocacaoProfessor
 from app.models.disponibilidade import DisponibilidadeProfessor
 from app.models.sala import Sala
-from app.models.horario import Horario
 from app.schemas.schemas import SolverResponse, SlotProposto
+
+# ── Slots por turno (exatamente 4 cada) ──────────────────────────────────────
+TURNOS_SLOTS = {
+    "Manhã": ["08:00", "08:50", "10:00", "10:50"],
+    "Tarde": ["13:10", "14:00", "15:10", "16:00"],
+    "Noite": ["19:00", "19:50", "21:00", "21:50"],
+}
+
+# Mapa slot → turno (para diagnóstico)
+SLOT_TURNO = {s: t for t, slots in TURNOS_SLOTS.items() for s in slots}
 
 DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
 
-SLOTS = [
-    "07:00", "07:50", "08:40", "09:30", "10:20", "11:10",
-    "13:00", "13:50", "14:40", "15:30", "16:20", "17:10",
-    "18:10", "19:00", "19:50", "20:40", "21:30",
-]
+# Índice global de slots (para o mapa de disponibilidade)
+ALL_SLOTS = []
+for t in ("Manhã", "Tarde", "Noite"):
+    ALL_SLOTS.extend(TURNOS_SLOTS[t])
 
-def slot_fim(inicio: str) -> str:
-    h, m = map(int, inicio.split(":"))
+# Horário fim de cada slot (50 min depois)
+SLOT_FIM = {}
+for s in ALL_SLOTS:
+    h, m = map(int, s.split(":"))
     total = h * 60 + m + 50
-    return f"{total // 60:02d}:{total % 60:02d}"
+    SLOT_FIM[s] = f"{total // 60:02d}:{total % 60:02d}"
 
+
+def _turnos_permitidos(turno_turma: str) -> list:
+    """Retorna os nomes de turno permitidos para a turma."""
+    if turno_turma == "Noite":
+        return ["Noite"]
+    if turno_turma == "Manhã":
+        return ["Manhã"]
+    if turno_turma == "Tarde":
+        return ["Tarde"]
+    # Integral = Manhã ou Tarde, nunca Noite
+    return ["Manhã", "Tarde"]
+
+
+# ALL_BLOCOS: list of (dia_idx, turno_nome, [slot0, slot1, slot2, slot3])
+# Cada turno tem exatamente 4 slots → há apenas 1 bloco possível por turno por dia
+ALL_BLOCOS = []
+for d_idx in range(len(DIAS)):
+    for turno, slots in TURNOS_SLOTS.items():
+        ALL_BLOCOS.append((d_idx, turno, slots))
+
+B = len(ALL_BLOCOS)  # 5 dias × 3 turnos = 15 blocos possíveis
+
+
+# ── Solver principal ──────────────────────────────────────────────────────────
 
 def rodar_solver(semestre_id: int, db: Session) -> SolverResponse:
-    # ── 1. Carregar dados ───────────────────────────────────────────────────────
-    alocacoes = db.query(AlocacaoProfessor).filter(
-        AlocacaoProfessor.semestre_id == semestre_id
-    ).all()
-
-    if not alocacoes:
+    try:
+        from ortools.sat.python import cp_model as _cp
+    except ImportError:
         return SolverResponse(
-            status="inviavel",
-            slots=[],
-            conflitos=["Nenhuma alocação professor→disciplina→turma cadastrada para este semestre."],
-            stats={},
+            status="inviavel", slots=[], stats={},
+            conflitos=["OR-Tools não instalado. Verifique os logs do backend."],
         )
 
-    disponibilidades = db.query(DisponibilidadeProfessor).filter(
-        DisponibilidadeProfessor.semestre_id == semestre_id
-    ).all()
+    # 1. Dados
+    alocacoes = (db.query(AlocacaoProfessor)
+                   .filter(AlocacaoProfessor.semestre_id == semestre_id)
+                   .all())
+    if not alocacoes:
+        return SolverResponse(
+            status="inviavel", slots=[], stats={},
+            conflitos=["Nenhuma alocação professor→disciplina→turma cadastrada."],
+        )
+
+    disponibilidades = (db.query(DisponibilidadeProfessor)
+                          .filter(DisponibilidadeProfessor.semestre_id == semestre_id)
+                          .all())
 
     salas = db.query(Sala).filter(Sala.ativa == True).all()
     if not salas:
         return SolverResponse(
-            status="inviavel",
-            slots=[],
+            status="inviavel", slots=[], stats={},
             conflitos=["Nenhuma sala ativa cadastrada."],
-            stats={},
         )
 
-    # Índices
-    A = len(alocacoes)          # número de alocações
-    D = len(DIAS)               # 5 dias
-    S = len(SLOTS)              # 17 slots
-    R = len(salas)              # salas
+    A = len(alocacoes)
+    R = len(salas)
+    sala_ids  = [s.id for s in salas]
+    sala_idx  = {s.id: i for i, s in enumerate(salas)}
 
-    sala_ids = [s.id for s in salas]
-
-    # Disponibilidade indexada: (prof_id, dia_idx, slot_idx) → tipo
-    disp_map: dict[tuple, str] = {}
+    # Mapa disponibilidade: (prof_id, dia_idx, slot_str) → tipo
+    disp_map = {}
     for d in disponibilidades:
-        if d.dia_semana in DIAS and d.horario_inicio in SLOTS:
-            disp_map[(d.professor_id, DIAS.index(d.dia_semana), SLOTS.index(d.horario_inicio))] = d.tipo
+        if d.dia_semana in DIAS and d.horario_inicio in ALL_SLOTS:
+            disp_map[(d.professor_id, DIAS.index(d.dia_semana), d.horario_inicio)] = d.tipo
 
-    # ── 2. Modelo CP-SAT ────────────────────────────────────────────────────────
-    model = cp_model.CpModel()
+    # Índice de sala preferida por alocação (-1 = sem preferência)
+    sala_pref = []
+    for al in alocacoes:
+        pref = getattr(al, 'sala_id', None)
+        sala_pref.append(sala_idx.get(pref, -1) if pref else -1)
 
-    # Variável principal: x[a, d, s, r] = 1 se alocação a está no dia d, slot s, sala r
-    x = {}
+    # Blocos válidos por alocação
+    def blocos_validos(al):
+        permitidos = set(_turnos_permitidos(al.turma.turno))
+        result = []
+        for b_idx, (d_idx, turno, slots) in enumerate(ALL_BLOCOS):
+            if turno not in permitidos:
+                continue
+            bloqueado = any(
+                disp_map.get((al.professor_id, d_idx, s)) == "indisponivel"
+                for s in slots
+            )
+            if not bloqueado:
+                result.append(b_idx)
+        return result
+
+    blocos_por_al = [blocos_validos(al) for al in alocacoes]
+
+    # Verificação rápida
+    sem_bloco = [
+        f"Prof. {al.professor.nome} / {al.disciplina.nome} / {al.turma.nome}: "
+        f"nenhum bloco disponível no turno '{al.turma.turno}'."
+        for i, al in enumerate(alocacoes) if not blocos_por_al[i]
+    ]
+    if sem_bloco:
+        return SolverResponse(status="inviavel", slots=[], stats={}, conflitos=sem_bloco)
+
+    # 2. Modelo
+    model = _cp.CpModel()
+
+    # y[a, b, r] = alocação a no bloco b na sala r
+    y = {}
     for a in range(A):
-        for d in range(D):
-            for s in range(S):
-                for r in range(R):
-                    x[a, d, s, r] = model.new_bool_var(f"x_{a}_{d}_{s}_{r}")
-
-    # ── Hard constraints ────────────────────────────────────────────────────────
-
-    # H1: Cada alocação tem exatamente 4 slots na semana
-    for a in range(A):
-        model.add(
-            sum(x[a, d, s, r] for d in range(D) for s in range(S) for r in range(R)) == 4
-        )
-
-    # H2: Professor não pode ter 2 aulas no mesmo slot
-    prof_ids = [al.professor_id for al in alocacoes]
-    for d in range(D):
-        for s in range(S):
-            profs_unicos = set(prof_ids)
-            for pid in profs_unicos:
-                alocacoes_prof = [a for a, al in enumerate(alocacoes) if al.professor_id == pid]
-                if len(alocacoes_prof) > 1:
-                    model.add(
-                        sum(x[a, d, s, r] for a in alocacoes_prof for r in range(R)) <= 1
-                    )
-
-    # H3: Turma não pode ter 2 aulas no mesmo slot
-    turma_ids = [al.turma_id for al in alocacoes]
-    for d in range(D):
-        for s in range(S):
-            turmas_unicas = set(turma_ids)
-            for tid in turmas_unicas:
-                alocacoes_turma = [a for a, al in enumerate(alocacoes) if al.turma_id == tid]
-                if len(alocacoes_turma) > 1:
-                    model.add(
-                        sum(x[a, d, s, r] for a in alocacoes_turma for r in range(R)) <= 1
-                    )
-
-    # H4: Sala não pode ter 2 aulas no mesmo slot
-    for d in range(D):
-        for s in range(S):
+        for b in blocos_por_al[a]:
             for r in range(R):
-                model.add(
-                    sum(x[a, d, s, r] for a in range(A)) <= 1
-                )
+                y[a, b, r] = model.new_bool_var(f"y_{a}_{b}_{r}")
 
-    # H5: Slots 'indisponivel' são proibidos para o professor
+    # H1: cada alocação usa exatamente 1 bloco em 1 sala
+    for a in range(A):
+        model.add(sum(y[a, b, r]
+                      for b in blocos_por_al[a]
+                      for r in range(R)) == 1)
+
+    # Índices por professor e turma
+    prof_als  = {}
+    turma_als = {}
     for a, al in enumerate(alocacoes):
-        for d in range(D):
-            for s in range(S):
-                if disp_map.get((al.professor_id, d, s)) == "indisponivel":
-                    for r in range(R):
-                        model.add(x[a, d, s, r] == 0)
+        prof_als.setdefault(al.professor_id, []).append(a)
+        turma_als.setdefault(al.turma_id,    []).append(a)
 
-    # ── Soft constraints (penalidades) ──────────────────────────────────────────
+    # H3/H4/H5: sem sobreposição (professor, turma, sala) em (dia, slot)
+    for d_idx in range(len(DIAS)):
+        for turno, slots in TURNOS_SLOTS.items():
+            for slot in slots:
+                # H3: professor
+                for pid, als in prof_als.items():
+                    vs = [y[a, b, r]
+                          for a in als
+                          for b in blocos_por_al[a]
+                          for r in range(R)
+                          if ALL_BLOCOS[b][0] == d_idx
+                          and ALL_BLOCOS[b][1] == turno
+                          and (a, b, r) in y]
+                    if len(vs) > 1:
+                        model.add(sum(vs) <= 1)
+
+                # H4: turma
+                for tid, als in turma_als.items():
+                    vs = [y[a, b, r]
+                          for a in als
+                          for b in blocos_por_al[a]
+                          for r in range(R)
+                          if ALL_BLOCOS[b][0] == d_idx
+                          and ALL_BLOCOS[b][1] == turno
+                          and (a, b, r) in y]
+                    if len(vs) > 1:
+                        model.add(sum(vs) <= 1)
+
+                # H5: sala
+                for r in range(R):
+                    vs = [y[a, b, r]
+                          for a in range(A)
+                          for b in blocos_por_al[a]
+                          if ALL_BLOCOS[b][0] == d_idx
+                          and ALL_BLOCOS[b][1] == turno
+                          and (a, b, r) in y]
+                    if len(vs) > 1:
+                        model.add(sum(vs) <= 1)
+
+    # 3. Penalidades
     penalidades = []
 
-    # S1: Penalidade por usar slot 'prefere_nao'
-    PESO_PREFERE_NAO = 10
+    # S1: prefere_nao
     for a, al in enumerate(alocacoes):
-        for d in range(D):
-            for s in range(S):
-                if disp_map.get((al.professor_id, d, s)) == "prefere_nao":
-                    uso = model.new_bool_var(f"pref_{a}_{d}_{s}")
-                    model.add(uso == sum(x[a, d, s, r] for r in range(R)))
-                    penalidades.append(uso * PESO_PREFERE_NAO)
+        for b in blocos_por_al[a]:
+            d_idx, turno, slots = ALL_BLOCOS[b]
+            n = sum(1 for s in slots
+                    if disp_map.get((al.professor_id, d_idx, s)) == "prefere_nao")
+            if n:
+                uso = model.new_bool_var(f"pref_{a}_{b}")
+                model.add(sum(y[a, b, r] for r in range(R)
+                              if (a, b, r) in y) == uso)
+                penalidades.append(uso * 10 * n)
 
-    # S2: Penalidade por concentrar aulas da mesma alocação no mesmo dia
-    PESO_DIA_REPETIDO = 5
+    # S2: mesma turma no mesmo dia
+    for d_idx in range(len(DIAS)):
+        for tid, als in turma_als.items():
+            vs_dia = []
+            for a in als:
+                for b in blocos_por_al[a]:
+                    if ALL_BLOCOS[b][0] == d_idx:
+                        v = model.new_bool_var(f"td_{a}_{b}")
+                        model.add(sum(y[a, b, r] for r in range(R)
+                                      if (a, b, r) in y) == v)
+                        vs_dia.append(v)
+            if len(vs_dia) > 1:
+                exc = model.new_int_var(0, len(vs_dia), f"exc_{tid}_{d_idx}")
+                model.add(exc >= sum(vs_dia) - 1)
+                penalidades.append(exc * 5)
+
+    # S3: janelas no dia do professor (entre turnos do mesmo dia)
+    for d_idx in range(len(DIAS)):
+        for pid, als in prof_als.items():
+            if len(als) < 2:
+                continue
+            turno_occ = []
+            for turno in ("Manhã", "Tarde", "Noite"):
+                b_turno = [b for a in als
+                           for b in blocos_por_al[a]
+                           if ALL_BLOCOS[b][0] == d_idx
+                           and ALL_BLOCOS[b][1] == turno]
+                if b_turno:
+                    occ = model.new_bool_var(f"occ_{pid}_{d_idx}_{turno}")
+                    vs = [y[a, b, r]
+                          for a in als
+                          for b in blocos_por_al[a]
+                          for r in range(R)
+                          if ALL_BLOCOS[b][0] == d_idx
+                          and ALL_BLOCOS[b][1] == turno
+                          and (a, b, r) in y]
+                    model.add(sum(vs) >= 1).only_enforce_if(occ)
+                    model.add(sum(vs) == 0).only_enforce_if(occ.Not())
+                    turno_occ.append(occ)
+            # Janela: Manhã ocupada, Tarde livre, Noite ocupada
+            if len(turno_occ) == 3:
+                janela = model.new_bool_var(f"janela_{pid}_{d_idx}")
+                model.add_bool_and([turno_occ[0], turno_occ[1].Not(), turno_occ[2]]).only_enforce_if(janela)
+                model.add_bool_or([turno_occ[0].Not(), turno_occ[1], turno_occ[2].Not()]).only_enforce_if(janela.Not())
+                penalidades.append(janela * 3)
+
+    # S4: sala preferida (penaliza se não conseguir usar a preferida)
     for a in range(A):
-        for d in range(D):
-            aulas_no_dia = model.new_int_var(0, min(4, S), f"aulas_dia_{a}_{d}")
-            model.add(aulas_no_dia == sum(x[a, d, s, r] for s in range(S) for r in range(R)))
-            # Penaliza ter mais de 1 aula da mesma disciplina no mesmo dia
-            excesso = model.new_int_var(0, 3, f"exc_{a}_{d}")
-            model.add(excesso >= aulas_no_dia - 1)
-            penalidades.append(excesso * PESO_DIA_REPETIDO)
+        r_pref = sala_pref[a]
+        if r_pref < 0:
+            continue
+        usa_pref = model.new_bool_var(f"sala_pref_{a}")
+        vs_pref = [y[a, b, r_pref]
+                   for b in blocos_por_al[a]
+                   if (a, b, r_pref) in y]
+        if vs_pref:
+            model.add(sum(vs_pref) == usa_pref)
+            penalidades.append(usa_pref.Not() * 1)  # peso baixo — preferência suave
 
-    # S3: Penalidade por janelas no dia do professor
-    PESO_JANELA = 3
-    for d in range(D):
-        profs_unicos = set(prof_ids)
-        for pid in profs_unicos:
-            alocacoes_prof = [a for a, al in enumerate(alocacoes) if al.professor_id == pid]
-            for s in range(1, S - 1):
-                # janela: slot s livre, mas slot s-1 e s+1 ocupados
-                antes  = model.new_bool_var(f"antes_{pid}_{d}_{s}")
-                depois = model.new_bool_var(f"dep_{pid}_{d}_{s}")
-                livre  = model.new_bool_var(f"livre_{pid}_{d}_{s}")
-                janela = model.new_bool_var(f"janela_{pid}_{d}_{s}")
-
-                model.add(
-                    sum(x[a, d, s-1, r] for a in alocacoes_prof for r in range(R)) >= 1
-                ).only_enforce_if(antes)
-                model.add(
-                    sum(x[a, d, s-1, r] for a in alocacoes_prof for r in range(R)) == 0
-                ).only_enforce_if(antes.Not())
-
-                model.add(
-                    sum(x[a, d, s+1, r] for a in alocacoes_prof for r in range(R)) >= 1
-                ).only_enforce_if(depois)
-                model.add(
-                    sum(x[a, d, s+1, r] for a in alocacoes_prof for r in range(R)) == 0
-                ).only_enforce_if(depois.Not())
-
-                model.add(
-                    sum(x[a, d, s, r] for a in alocacoes_prof for r in range(R)) == 0
-                ).only_enforce_if(livre)
-                model.add(
-                    sum(x[a, d, s, r] for a in alocacoes_prof for r in range(R)) >= 1
-                ).only_enforce_if(livre.Not())
-
-                model.add_bool_and([antes, depois, livre]).only_enforce_if(janela)
-                model.add_bool_or([antes.Not(), depois.Not(), livre.Not()]).only_enforce_if(janela.Not())
-                penalidades.append(janela * PESO_JANELA)
-
-    # Minimizar penalidades totais
     if penalidades:
         model.minimize(sum(penalidades))
 
-    # ── 3. Resolver ─────────────────────────────────────────────────────────────
-    solver = cp_model.CpSolver()
+    # 4. Resolver
+    solver = _cp.CpSolver()
     solver.parameters.max_time_in_seconds = 60.0
-    solver.parameters.num_search_workers = 4
+    solver.parameters.num_search_workers  = 4
+    code = solver.solve(model)
 
-    status = solver.solve(model)
+    MAP = {_cp.OPTIMAL:"ok", _cp.FEASIBLE:"parcial",
+           _cp.INFEASIBLE:"inviavel", _cp.UNKNOWN:"inviavel"}
+    status_str = MAP.get(code, "inviavel")
 
-    status_map = {
-        cp_model.OPTIMAL:    "ok",
-        cp_model.FEASIBLE:   "parcial",
-        cp_model.INFEASIBLE: "inviavel",
-        cp_model.UNKNOWN:    "inviavel",
-    }
-    status_str = status_map.get(status, "inviavel")
-
-    if status in (cp_model.INFEASIBLE, cp_model.UNKNOWN):
-        # Tentar identificar conflitos
-        conflitos = _identificar_conflitos(alocacoes, disp_map, salas, DIAS, SLOTS)
+    if code in (_cp.INFEASIBLE, _cp.UNKNOWN):
         return SolverResponse(
-            status="inviavel",
-            slots=[],
-            conflitos=conflitos or ["Não foi possível encontrar solução. Verifique disponibilidades e número de aulas."],
-            stats={"status_solver": solver.status_name()},
+            status="inviavel", slots=[], stats={"status_solver": solver.status_name()},
+            conflitos=_diagnostico(alocacoes, blocos_por_al, turma_als),
         )
 
-    # ── 4. Extrair solução ───────────────────────────────────────────────────────
+    # 5. Extrair solução
     slots_propostos = []
+    avisos = []
     for a, al in enumerate(alocacoes):
-        for d in range(D):
-            for s in range(S):
-                for r in range(R):
-                    if solver.value(x[a, d, s, r]):
+        for b in blocos_por_al[a]:
+            for r in range(R):
+                if (a, b, r) in y and solver.value(y[a, b, r]):
+                    d_idx, turno, slots = ALL_BLOCOS[b]
+                    for s in slots:
                         slots_propostos.append(SlotProposto(
                             turma_id=al.turma_id,
                             turma_nome=al.turma.nome,
@@ -245,54 +327,56 @@ def rodar_solver(semestre_id: int, db: Session) -> SolverResponse:
                             professor_id=al.professor_id,
                             professor_nome=al.professor.nome,
                             sala_id=sala_ids[r],
-                            dia_semana=DIAS[d],
-                            horario_inicio=SLOTS[s],
-                            horario_fim=slot_fim(SLOTS[s]),
+                            dia_semana=DIAS[d_idx],
+                            horario_inicio=s,
+                            horario_fim=SLOT_FIM[s],
                         ))
-
-    # Avisos sobre slots 'prefere_nao' usados
-    avisos = []
-    for sp in slots_propostos:
-        d_idx = DIAS.index(sp.dia_semana)
-        s_idx = SLOTS.index(sp.horario_inicio)
-        if disp_map.get((sp.professor_id, d_idx, s_idx)) == "prefere_nao":
-            avisos.append(
-                f"{sp.professor_nome}: {sp.dia_semana} {sp.horario_inicio} "
-                f"(prefere não — necessário para {sp.disciplina_nome} / {sp.turma_nome})"
-            )
+                        if disp_map.get((al.professor_id, d_idx, s)) == "prefere_nao":
+                            avisos.append(
+                                f"{al.professor.nome}: {DIAS[d_idx]} {s} "
+                                f"(prefere não — necessário para {al.disciplina.nome}/{al.turma.nome})"
+                            )
+                    # Aviso se sala preferida não foi respeitada
+                    r_pref = sala_pref[a]
+                    if r_pref >= 0 and r != r_pref:
+                        avisos.append(
+                            f"{al.disciplina.nome}/{al.turma.nome}: sala preferida indisponível, "
+                            f"realocada para {salas[r].nome}."
+                        )
 
     return SolverResponse(
         status=status_str,
         slots=slots_propostos,
-        conflitos=avisos,
+        conflitos=list(dict.fromkeys(avisos)),
         stats={
-            "status_solver": solver.status_name(),
-            "tempo_segundos": round(solver.wall_time, 2),
+            "status_solver":    solver.status_name(),
+            "tempo_segundos":   round(solver.wall_time, 2),
             "penalidade_total": int(solver.objective_value) if penalidades else 0,
-            "aulas_alocadas": len(slots_propostos),
-            "aulas_esperadas": A * 4,
+            "aulas_alocadas":   len(slots_propostos),
+            "aulas_esperadas":  len(alocacoes) * 4,
+            "blocos_alocados":  len(slots_propostos) // 4,
         },
     )
 
 
-def _identificar_conflitos(alocacoes, disp_map, salas, dias, slots) -> list[str]:
-    """Heurística simples para dar dicas sobre por que é inviável."""
-    conflitos = []
-    n_salas = len(salas)
-    n_slots_total = len(dias) * len(slots)
-
-    for al in alocacoes:
-        slots_disponiveis = sum(
-            1 for d in range(len(dias)) for s in range(len(slots))
-            if disp_map.get((al.professor_id, d, s)) != "indisponivel"
-        )
-        if slots_disponiveis < 4:
-            conflitos.append(
-                f"Prof. {al.professor.nome}: apenas {slots_disponiveis} slot(s) disponível(is) "
-                f"para {al.disciplina.nome} / {al.turma.nome} (necessário: 4)"
+def _diagnostico(alocacoes, blocos_por_al, turma_als) -> list:
+    msgs = []
+    for i, al in enumerate(alocacoes):
+        n = len(blocos_por_al[i])
+        if n == 0:
+            msgs.append(
+                f"Prof. {al.professor.nome} / {al.disciplina.nome} / {al.turma.nome}: "
+                f"zero blocos disponíveis para turno '{al.turma.turno}'."
             )
-
-    if n_salas == 0:
-        conflitos.append("Nenhuma sala ativa disponível.")
-
-    return conflitos
+        elif n < 3:
+            msgs.append(
+                f"Prof. {al.professor.nome} / {al.disciplina.nome} / {al.turma.nome}: "
+                f"apenas {n} bloco(s) — risco de conflito."
+            )
+    for tid, als in turma_als.items():
+        if len(als) > 5:
+            nome = alocacoes[als[0]].turma.nome
+            msgs.append(f"Turma '{nome}' tem {len(als)} disciplinas — verifique disponibilidade de blocos.")
+    if not msgs:
+        msgs.append("Solução inviável. Revise disponibilidades e conflitos entre turmas/professores/salas.")
+    return msgs

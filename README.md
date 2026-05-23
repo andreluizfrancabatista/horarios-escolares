@@ -4,40 +4,45 @@ Sistema web de gestão de horários para ensino superior — React + FastAPI + P
 
 ---
 
-## ✨ Funcionalidades — v2.0 (atual)
+## ✨ Funcionalidades — v2.1 (atual)
 
-### Área administrativa
+### Módulo de Alocação Automática (OR-Tools CP-SAT)
 
-**Cadastros:** Semestres, Turmas, Disciplinas (globais), Professores, Salas
-**Importação CSV em massa** com validação de colunas e remoção em bulk
-**Grade manual:** visualização por turma/professor/sala, drag-and-drop, edição inline, multi-slot
+**Regras rígidas implementadas:**
+- Cada disciplina recebe exatamente **1 bloco de 4 slots consecutivos** na semana
+- Os 4 slots são sempre do **mesmo turno** (Manhã, Tarde ou Noite)
+- Turmas com turno **Noite** → somente blocos noturnos (18:10–21:30)
+- Turmas com turno **Manhã** ou **Tarde** → somente blocos diurnos (07:00–17:10)
+- Turmas com turno **Integral** → qualquer turno
+- Sem conflitos de professor, sala ou turma
+- Respeita disponibilidade `indisponivel` do professor (nunca aloca)
 
-### Alocação Automática (OR-Tools) — `/auto`
+**Regras suaves (minimizadas):**
+- Evita slots `prefere_nao` do professor (peso 10)
+- Distribui blocos de mesma turma em dias diferentes (peso 5)
+- Minimiza janelas no dia do professor (peso 3)
 
-**Aba 1 — Alocações:** define quem ministra qual disciplina para qual turma no semestre
+**Importação CSV nas abas do módulo:**
 
-**Aba 2 — Disponibilidades:** grade visual por professor
-- Clique 1× = **Indisponível** (rígido — solver nunca aloca)
-- Clique 2× = **Prefere não** (suave — solver evita, mas pode usar se necessário)
-- Clique 3× = limpa
+| Arquivo | Colunas |
+|---------|---------|
+| `alocacoes.csv` | `professor_nome`, `disciplina_nome`, `turma_codigo` |
+| `disponibilidades.csv` | `professor_nome`, `dia_semana`, `horario_inicio`, `tipo` |
 
-**Aba 3 — Solver:**
-- Botão "Gerar grade automaticamente" invoca o CP-SAT do OR-Tools
-- Exibe resultado: status (ótimo / parcial / inviável), conflitos, grade proposta por turma
-- Botão "Aceitar e importar" substitui a grade atual pelos slots gerados
-- Admin pode ajustar manualmente após importar
+Valores de `tipo`: `indisponivel` (rígido) ou `prefere_nao` (suave).
+Dias válidos: `Segunda`, `Terça`, `Quarta`, `Quinta`, `Sexta`.
 
-**Regras do solver:**
-- 4 aulas/semana por disciplina (rígido)
-- Sem conflitos de professor, sala ou turma (rígido)
-- Respeita "indisponível" sempre (rígido)
-- Minimiza uso de "prefere não" (suave, peso 10)
-- Distribui as 4 aulas em dias diferentes (suave, peso 5)
-- Minimiza janelas no dia do professor (suave, peso 3)
+### Fluxo de uso do módulo automático
 
-### Área pública `/grade`
-
-Visualização de horários sem login, com toggle dark/claro (Default ↔ Instituto Federal).
+```
+1. Cadastrar turmas com turno correto (Manhã/Tarde/Noite/Integral)
+2. /auto → Aba 1: alocar professor → disciplina → turma
+   (ou importar alocacoes.csv)
+3. /auto → Aba 2: preencher disponibilidade de cada professor
+   (ou importar disponibilidades.csv)
+4. /auto → Aba 3: clicar "Gerar grade automaticamente"
+5. Revisar proposta → "Aceitar e importar" ou ajustar manualmente
+```
 
 ---
 
@@ -56,47 +61,33 @@ docker compose up -d --build
 
 **Login padrão:** `admin@escola.edu.br` / `admin123`
 
----
-
-## 🔄 Fluxo de uso do módulo automático
-
-```
-1. Cadastrar turmas + disciplinas + professores + salas
-2. /auto → Aba 1: alocar professor → disciplina → turma
-3. /auto → Aba 2: preencher disponibilidade de cada professor
-4. /auto → Aba 3: clicar "Gerar grade automaticamente"
-5. Revisar proposta → "Aceitar e importar" ou ajustar manualmente em /horarios
-```
+> Após mudanças no modelo: `docker compose down -v && docker compose up -d --build`
 
 ---
 
 ## 🖼️ Favicon
 
-Substitua `frontend/public/favicon.ico` pelo ícone da sua instituição e rode:
-```bash
-docker compose up -d --build frontend
-```
+Substitua `frontend/public/favicon.ico` e rode `docker compose up -d --build frontend`.
 
 ---
 
 ## 📁 Estrutura relevante
 
 ```
-backend/app/
-  models/
-    alocacao.py         AlocacaoProfessor (professor→disciplina→turma por semestre)
-    disponibilidade.py  DisponibilidadeProfessor (indisponivel | prefere_nao)
-  services/
-    solver.py           OR-Tools CP-SAT — regras rígidas + suaves + extração de solução
-  api/routes/
-    alocacoes.py        CRUD de alocações
-    disponibilidades.py CRUD + salvar grade completa do professor
-    solver.py           POST /rodar, POST /aceitar
+backend/app/services/solver.py
+  BLOCOS_POR_TURNO   blocos de 4 slots consecutivos por turno
+  _turnos_permitidos restrição turno da turma
+  rodar_solver       modelo CP-SAT completo
+  _diagnostico       heurística de diagnóstico de inviabilidade
 
-frontend/src/pages/
-  AutoPage.jsx          3 abas: Alocações, Disponibilidades, Solver
-  HorariosPage.jsx      grade manual (aceita resultado do solver para ajuste)
-  GradePage.jsx         visualização pública com toggle de tema
+backend/app/api/routes/bulk.py
+  /bulk/alocacoes?semestre_id=N       CSV professor→disciplina→turma
+  /bulk/disponibilidades?semestre_id=N CSV disponibilidades por slot
+
+frontend/src/pages/AutoPage.jsx
+  AbaAlocacoes        + botão importar CSV
+  AbaDisponibilidades + botão importar CSV
+  AbaSolver           executa e exibe proposta
 ```
 
 ---
@@ -106,9 +97,10 @@ frontend/src/pages/
 | Versão | Status |
 |--------|--------|
 | v1.x | Gestão manual, bulk CSV, temas, grade pública ✅ |
-| v2.0 | Alocação automática OR-Tools CP-SAT ✅ |
-| v2.1 | Exportação PDF/Excel da grade |
-| v2.2 | Link público para professor preencher disponibilidade |
+| v2.0 | Alocação automática OR-Tools básica ✅ |
+| v2.1 | Blocos de 4 consecutivos, restrição de turno por turma, CSV de alocações e disponibilidades ✅ |
+| v2.2 | Exportação PDF/Excel |
+| v2.3 | Link público para professor preencher disponibilidade |
 
 ---
 

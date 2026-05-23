@@ -101,6 +101,7 @@ class AlocacaoBase(BaseModel):
     professor_id:  int
     disciplina_id: int
     turma_id:      int
+    sala_id:       Optional[int] = None   # sala preferida (suave)
 
 class AlocacaoCreate(AlocacaoBase): pass
 
@@ -109,6 +110,7 @@ class AlocacaoOut(AlocacaoBase):
     professor:  Optional[ProfessorOut]  = None
     disciplina: Optional[DisciplinaOut] = None
     turma:      Optional[TurmaOut]      = None
+    sala:       Optional[SalaOut]       = None
     class Config: from_attributes = True
 
 

@@ -6,27 +6,47 @@ import api from '../../services/api'
 const TEMPLATES = {
   turmas: {
     label: 'Turmas',
-    endpoint: '/bulk/turmas',
+    endpoint: (sid) => '/bulk/turmas',
     headers: 'nome,codigo,turno',
-    exemplo: 'Ciência da Computação - 1º período,CC1,Manhã\nAnálise de Sistemas - 3º período,AS3,Noite',
+    exemplo: 'Ciência da Computação - 1º período,CC1,Manhã\nDireito - 3º período,DIR3N,Noite',
+    needsSemestre: false,
   },
   disciplinas: {
     label: 'Disciplinas',
-    endpoint: '/bulk/disciplinas',
+    endpoint: () => '/bulk/disciplinas',
     headers: 'nome',
-    exemplo: 'Cálculo I\nAlgoritmos\nEstrutura de Dados\nDireito Civil',
+    exemplo: 'Cálculo I\nAlgoritmos\nDireito Civil',
+    needsSemestre: false,
   },
   professores: {
     label: 'Professores',
-    endpoint: '/bulk/professores',
+    endpoint: () => '/bulk/professores',
     headers: 'nome',
-    exemplo: 'João Silva\nMaria Santos\nCarlos Oliveira',
+    exemplo: 'João Silva\nMaria Santos',
+    needsSemestre: false,
   },
   salas: {
     label: 'Salas',
-    endpoint: '/bulk/salas',
+    endpoint: () => '/bulk/salas',
     headers: 'nome,tipo,bloco',
-    exemplo: 'Sala 101,Sala comum,Bloco A\nLab Informática,Laboratório,Bloco B',
+    exemplo: 'Sala 101,Sala comum,Bloco A\nLab Info,Laboratório,Bloco B',
+    needsSemestre: false,
+  },
+  alocacoes: {
+    label: 'Alocações',
+    endpoint: (sid) => `/bulk/alocacoes?semestre_id=${sid}`,
+    headers: 'professor_nome,disciplina_nome,turma_codigo',
+    exemplo: 'João Silva,Cálculo I,CC1\nMaria Santos,Direito Civil,DIR3N',
+    needsSemestre: true,
+    hint: 'Vincula professor → disciplina → turma. Use o nome exato do professor, disciplina e o código da turma.',
+  },
+  disponibilidades: {
+    label: 'Disponibilidades',
+    endpoint: (sid) => `/bulk/disponibilidades?semestre_id=${sid}`,
+    headers: 'professor_nome,dia_semana,horario_inicio,tipo',
+    exemplo: 'João Silva,Segunda,07:00,indisponivel\nJoão Silva,Sexta,18:10,prefere_nao\nMaria Santos,Quarta,13:00,indisponivel',
+    needsSemestre: true,
+    hint: 'tipo: "indisponivel" (rígido) ou "prefere_nao" (suave). Dias: Segunda, Terça, Quarta, Quinta, Sexta.',
   },
 }
 
@@ -39,7 +59,7 @@ function downloadTemplate(tipo) {
   URL.revokeObjectURL(url)
 }
 
-export default function BulkImportModal({ tipo, onClose, onSuccess }) {
+export default function BulkImportModal({ tipo, semestreId, onClose, onSuccess }) {
   const [file, setFile]       = useState(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
@@ -54,11 +74,12 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
 
   const handleUpload = async () => {
     if (!file) return
+    if (t.needsSemestre && !semestreId) { toast.error('Selecione um semestre primeiro'); return }
     setLoading(true)
     const form = new FormData()
     form.append('file', file)
     try {
-      const { data } = await api.post(t.endpoint, form, {
+      const { data } = await api.post(t.endpoint(semestreId), form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setResult(data)
@@ -67,9 +88,7 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
       const msg = e.response?.data?.detail || 'Erro ao importar arquivo'
       toast.error(msg)
       setResult({ criados: 0, erros: [{ linha: '—', erro: msg }] })
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   return (
@@ -79,6 +98,13 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
           <span className="modal-title">Importar {t.label} via CSV</span>
           <button className="btn btn-ghost btn-sm" onClick={onClose}><X size={16} /></button>
         </div>
+
+        {/* Info / hint */}
+        {t.hint && (
+          <div style={{ background:'var(--accent-dim)', border:'1px solid var(--accent)', borderRadius:'var(--radius-sm)', padding:'10px 14px', marginBottom:16, fontSize:13, color:'var(--text-muted)' }}>
+            💡 {t.hint}
+          </div>
+        )}
 
         {/* Template */}
         <div style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:'var(--radius-sm)', padding:'12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
@@ -100,8 +126,7 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
             onDrop={e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]) }}
             style={{ marginBottom:20 }}
           >
-            <input ref={inputRef} type="file" accept=".csv"
-              onChange={e => handleFile(e.target.files[0])} />
+            <input ref={inputRef} type="file" accept=".csv" onChange={e => handleFile(e.target.files[0])} />
             {file ? (
               <div style={{ display:'flex', alignItems:'center', gap:10, justifyContent:'center' }}>
                 <FileText size={20} color="var(--accent)" />
@@ -111,9 +136,7 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
             ) : (
               <div>
                 <Upload size={32} style={{ color:'var(--text-dim)', marginBottom:8 }} />
-                <p style={{ color:'var(--text-muted)', fontSize:14 }}>
-                  Arraste um <strong>.csv</strong> ou clique para selecionar
-                </p>
+                <p style={{ color:'var(--text-muted)', fontSize:14 }}>Arraste um <strong>.csv</strong> ou clique para selecionar</p>
               </div>
             )}
           </div>
@@ -159,9 +182,7 @@ export default function BulkImportModal({ tipo, onClose, onSuccess }) {
             </button>
           )}
           {result && (
-            <button className="btn btn-ghost" onClick={() => { setFile(null); setResult(null) }}>
-              Importar outro
-            </button>
+            <button className="btn btn-ghost" onClick={() => { setFile(null); setResult(null) }}>Importar outro</button>
           )}
         </div>
       </div>

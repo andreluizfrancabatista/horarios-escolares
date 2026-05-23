@@ -8,12 +8,12 @@ import ConfirmModal from '../components/ui/ConfirmModal'
 const DIAS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
 
 const SLOTS_RAW = [
-  { hora:'07:00', turno:'Manhã' }, { hora:'07:50', turno:'Manhã' }, { hora:'08:40', turno:'Manhã' },
-  { hora:'09:30', turno:'Manhã' }, { hora:'10:20', turno:'Manhã' }, { hora:'11:10', turno:'Manhã' },
-  { hora:'13:00', turno:'Tarde', sep:true }, { hora:'13:50', turno:'Tarde' }, { hora:'14:40', turno:'Tarde' },
-  { hora:'15:30', turno:'Tarde' }, { hora:'16:20', turno:'Tarde' }, { hora:'17:10', turno:'Tarde' },
-  { hora:'18:10', turno:'Noite', sep:true }, { hora:'19:00', turno:'Noite' }, { hora:'19:50', turno:'Noite' },
-  { hora:'20:40', turno:'Noite' }, { hora:'21:30', turno:'Noite' },
+  { hora:'08:00', turno:'Manhã' }, { hora:'08:50', turno:'Manhã' },
+  { hora:'10:00', turno:'Manhã' }, { hora:'10:50', turno:'Manhã' },
+  { hora:'13:10', turno:'Tarde', sep:true }, { hora:'14:00', turno:'Tarde' },
+  { hora:'15:10', turno:'Tarde' }, { hora:'16:00', turno:'Tarde' },
+  { hora:'19:00', turno:'Noite', sep:true }, { hora:'19:50', turno:'Noite' },
+  { hora:'21:00', turno:'Noite' }, { hora:'21:50', turno:'Noite' },
 ]
 const TURNO_COLOR = { Manhã:'var(--yellow)', Tarde:'var(--orange)', Noite:'var(--accent)' }
 

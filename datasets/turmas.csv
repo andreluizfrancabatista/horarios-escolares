@@ -1,11 +1,42 @@
 nome,codigo,turno
-Ciência da Computação - 1º período,TCC01,Integral
-Ciência da Computação - 3º período,TCC03,Integral
-Sistemas de Informação - 1º período,TSI01,Noite
-Sistemas de Informação - 5º período,TSI05,Noite
-Engenharia Elétrica - 2º período,TEE02,Integral
-Engenharia Mecânica - 4º período,TEM04,Integral
-Engenharia Civil - 6º período,TEC06,Integral
-Matemática - 1º período,TLM01,Noite
-Análise e Desenvolvimento de Sistemas - 3º período,TTD03,Noite
-Logística - 2º período,TTL02,Noite
+1º Ano Agricultura - A Integrado ao Ensino Médio,1,Integral
+1º Ano Agricultura - B Integrado ao Ensino Médio,2,Integral
+1º Ano Agroindústria Integrado ao Ensino Médio,3,Integral
+1º Ano Eletrotécnica Integrado ao Ensino Médio,4,Integral
+1º Ano Informática Integrado ao Ensino Médio,5,Integral
+1º Ano Química Integrado ao Ensino Médio,6,Integral
+2º Ano Agricultura Integrado ao Ensino Médio,7,Integral
+2º Ano Agroindústria Integrado ao Ensino Médio,8,Integral
+2º Ano Eletrotécnica Integrado ao Ensino Médio,9,Integral
+2º Ano Informática Integrado ao Ensino Médio,10,Integral
+2º Ano Química Integrado ao Ensino Médio,11,Integral
+3º Ano Agricultura Integrado ao Ensino Médio,12,Integral
+3º Ano Agroindústria Integrado ao Ensino Médio,13,Integral
+3º Ano Eletrotécnica Integrado ao Ensino Médio,14,Integral
+3º Ano Informática Integrado ao Ensino Médio,15,Integral
+3º Ano Química Integrado ao Ensino Médio,16,Integral
+Bacharelado em Administração - 8° Período,17,Integral
+Cenid Espanhol Pré-Intermdiário,18,Integral
+Cenid Inglês Iniciante,19,Integral
+Cenid Inglês Intermediário,20,Integral
+Cenid Inglês Pré-Intermediário,21,Noite
+Ciência da Computação - 1° Período,22,Noite
+Ciência da Computação - 3° Período,23,Noite
+Ciência da Computação - 5° Período,24,Noite
+Ciência da Computação - 7° Período,25,Noite
+Tecnologia em Alimentos - 1° Período,26,Noite
+Tecnologia em Alimentos - 2° Período - Oferta Especial,27,Noite
+Tecnologia em Alimentos - 3° Período,28,Noite
+Tecnologia em Alimentos - 5° Período,29,Noite
+Tecnologia em Alimentos - 7° Período,30,Noite
+Tecnologia em Análise e Desenvolvimento de Sistemas - 1º Período,31,Noite
+Tecnologia em Análise e Desenvolvimento de Sistemas - 3º Período,32,Noite
+Tecnologia em Análise e Desenvolvimento de Sistemas - 5º Período,33,Noite
+Tecnologia em Automação Industrial - 1º período,34,Noite
+Tecnologia em Automação Industrial - 3º período,35,Noite
+Tecnologia em Automação Industrial - 5º período,36,Noite
+Tecnologia em Processos Químicos - Oferta Especial,37,Noite
+Técnico em Administração Concomitante - 1º Período,38,Noite
+Técnico em Administração Concomitante - 2º Período,39,Noite
+Técnico em Eletrotécnica Concomitante - 1º Período,40,Noite
+Técnico em Eletrotécnica Concomitante - 3º Período,41,Noite

@@ -1,31 +1,24 @@
 nome,tipo,bloco
-B01,Sala comum,B
-B02,Sala comum,B
-B03,Laboratório,B
-B04,Sala comum,B
-B05,Laboratório,B
-B06,Sala comum,B
-C01,Sala comum,C
-C02,Sala comum,C
-C03,Laboratório,C
-C04,Sala comum,C
-C05,Laboratório,C
-C06,Sala comum,C
-D01,Sala comum,D
-D02,Sala comum,D
-D03,Laboratório,D
-D04,Sala comum,D
-D05,Laboratório,D
-D06,Sala comum,D
-E01,Sala comum,E
-E02,Sala comum,E
-E03,Laboratório,E
-E04,Sala comum,E
-E05,Laboratório,E
-E06,Sala comum,E
-F01,Sala comum,F
-F02,Sala comum,F
-F03,Laboratório,F
-F04,Sala comum,F
-F05,Laboratório,F
-F06,Sala comum,F
+B03,Comum,B
+B04,Comum,B
+B05,Comum,B
+B06,Comum,B
+B07,Comum,B
+E01,Comum,E
+E02,Comum,E
+E03,Comum,E
+E04,Comum,E
+E05,Comum,E
+E06,Comum,E
+F01,Comum,F
+F02,Comum,F
+G01,Comum,G
+G02,Comum,G
+G03,Comum,G
+G04,Comum,G
+G05,Comum,G
+I01,Comum,I
+I02,Comum,I
+I03,Comum,I
+I04,Comum,I
+I05,Comum,I

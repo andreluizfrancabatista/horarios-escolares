@@ -14,6 +14,7 @@ LOAD = [
     joinedload(AlocacaoProfessor.professor),
     joinedload(AlocacaoProfessor.disciplina),
     joinedload(AlocacaoProfessor.turma),
+    joinedload(AlocacaoProfessor.sala),
 ]
 
 

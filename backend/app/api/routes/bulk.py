@@ -8,7 +8,7 @@ Colunas por entidade:
   salas:       nome, tipo, bloco
 """
 import csv, io
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -163,3 +163,98 @@ def bulk_delete_professores(req: BulkDeleteRequest, db: Session = Depends(get_db
 @router.delete("/salas",       dependencies=dep)
 def bulk_delete_salas(req: BulkDeleteRequest, db: Session = Depends(get_db)):
     return _bulk_delete(db, Sala, req.ids)
+
+
+# ── Bulk import: disponibilidades de professores ──────────────────────────────
+# CSV: professor_nome, dia_semana, horario_inicio, tipo
+REQUIRED_COLUMNS["disponibilidades"] = {"professor_nome", "dia_semana", "horario_inicio", "tipo"}
+
+from app.models.professor import Professor as _Professor
+from app.models.disponibilidade import DisponibilidadeProfessor as _Disp
+
+@router.post("/disponibilidades", dependencies=dep)
+async def bulk_disponibilidades(
+    file: UploadFile = File(...),
+    semestre_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    fieldnames, rows = parse_csv(await file.read())
+    validate_columns(fieldnames, "disponibilidades")
+    tipos_validos = {"indisponivel", "prefere_nao"}
+    created, errors = 0, []
+    for i, row in enumerate(rows, 2):
+        nome   = (row.get("professor_nome") or "").strip()
+        dia    = (row.get("dia_semana")      or "").strip()
+        hora   = (row.get("horario_inicio")  or "").strip()
+        tipo   = (row.get("tipo")            or "").strip().lower()
+        if not nome or not dia or not hora or not tipo:
+            errors.append({"linha": i, "erro": "Todos os campos são obrigatórios"}); continue
+        if tipo not in tipos_validos:
+            errors.append({"linha": i, "erro": f"Tipo inválido: '{tipo}'. Use: indisponivel, prefere_nao"}); continue
+        prof = db.query(_Professor).filter(_Professor.nome == nome).first()
+        if not prof:
+            errors.append({"linha": i, "erro": f"Professor '{nome}' não encontrado"}); continue
+        # Upsert
+        existing = db.query(_Disp).filter(
+            _Disp.semestre_id == semestre_id, _Disp.professor_id == prof.id,
+            _Disp.dia_semana == dia, _Disp.horario_inicio == hora,
+        ).first()
+        if existing:
+            existing.tipo = tipo; db.flush(); created += 1; continue
+        try:
+            db.add(_Disp(semestre_id=semestre_id, professor_id=prof.id,
+                         dia_semana=dia, horario_inicio=hora, tipo=tipo))
+            db.flush(); created += 1
+        except Exception as e:
+            db.rollback(); errors.append({"linha": i, "erro": str(e)})
+    db.commit()
+    return _result(created, errors)
+
+
+# ── Bulk import: alocações professor→disciplina→turma ─────────────────────────
+# CSV: professor_nome, disciplina_nome, turma_codigo
+REQUIRED_COLUMNS["alocacoes"] = {"professor_nome", "disciplina_nome", "turma_codigo"}
+
+from app.models.turma import Turma as _Turma
+from app.models.disciplina import Disciplina as _Disciplina
+from app.models.alocacao import AlocacaoProfessor as _Aloc
+
+@router.post("/alocacoes", dependencies=dep)
+async def bulk_alocacoes(
+    file: UploadFile = File(...),
+    semestre_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    fieldnames, rows = parse_csv(await file.read())
+    validate_columns(fieldnames, "alocacoes")
+    created, errors = 0, []
+    for i, row in enumerate(rows, 2):
+        pnome = (row.get("professor_nome")  or "").strip()
+        dnome = (row.get("disciplina_nome") or "").strip()
+        tcod  = (row.get("turma_codigo")    or "").strip()
+        if not pnome or not dnome or not tcod:
+            errors.append({"linha": i, "erro": "Todos os campos são obrigatórios"}); continue
+        prof = db.query(_Professor).filter(_Professor.nome == pnome).first()
+        if not prof:
+            errors.append({"linha": i, "erro": f"Professor '{pnome}' não encontrado"}); continue
+        disc = db.query(_Disciplina).filter(_Disciplina.nome == dnome).first()
+        if not disc:
+            errors.append({"linha": i, "erro": f"Disciplina '{dnome}' não encontrada"}); continue
+        turma = db.query(_Turma).filter(_Turma.codigo == tcod).first()
+        if not turma:
+            errors.append({"linha": i, "erro": f"Turma com código '{tcod}' não encontrada"}); continue
+        existente = db.query(_Aloc).filter(
+            _Aloc.semestre_id == semestre_id,
+            _Aloc.disciplina_id == disc.id,
+            _Aloc.turma_id == turma.id,
+        ).first()
+        if existente:
+            errors.append({"linha": i, "erro": f"Disciplina '{dnome}' já alocada para turma '{tcod}'"}); continue
+        try:
+            db.add(_Aloc(semestre_id=semestre_id, professor_id=prof.id,
+                         disciplina_id=disc.id, turma_id=turma.id))
+            db.flush(); created += 1
+        except Exception as e:
+            db.rollback(); errors.append({"linha": i, "erro": str(e)})
+    db.commit()
+    return _result(created, errors)
