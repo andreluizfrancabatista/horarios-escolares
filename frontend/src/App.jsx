@@ -20,7 +20,7 @@ function PrivateRoute({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/horarios-escolares">
       <Routes>
         {/* Rota pública — visualização de horários */}
         <Route path="/grade" element={<GradePage />} />
